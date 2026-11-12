@@ -1208,6 +1208,7 @@ dependencies = [
 name = "postgres-derive-test"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "postgres",
  "postgres-types",
  "trybuild",

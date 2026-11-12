@@ -1,5 +1,16 @@
 # Change Log
 
+## Unreleased
+
+### Added
+
+* Added a `#[postgres(flatten)]` attribute for fields of composite structs.
+
+### Changed
+
+* Derived `ToSql` and `FromSql` implementations for structs now also implement `ToSqlComposite` and
+  `FromSqlComposite`.
+
 ## v0.4.9 - 2026-06-12
 
 ### Fixed

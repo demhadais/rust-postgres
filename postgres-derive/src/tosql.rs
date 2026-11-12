@@ -7,7 +7,7 @@ use syn::{
 };
 
 use crate::accepts;
-use crate::composites::Field;
+use crate::composites::CompositeFields;
 use crate::composites::{append_generic_bound, new_derive_path};
 use crate::enums::Variant;
 use crate::overrides::Overrides;
@@ -26,6 +26,8 @@ pub fn expand_derive_tosql(input: DeriveInput) -> Result<TokenStream, Error> {
         .name
         .clone()
         .unwrap_or_else(|| input.ident.to_string());
+
+    let mut composite_fields = None;
 
     let (accepts_body, to_sql_body) = if overrides.transparent {
         match input.data {
@@ -89,15 +91,8 @@ pub fn expand_derive_tosql(input: DeriveInput) -> Result<TokenStream, Error> {
                 fields: Fields::Named(ref fields),
                 ..
             }) => {
-                let fields = fields
-                    .named
-                    .iter()
-                    .map(|field| Field::parse(field, overrides.rename_all))
-                    .collect::<Result<Vec<_>, _>>()?;
-                (
-                    accepts::composite_body(&name, "ToSql", &fields),
-                    composite_body(&fields),
-                )
+                composite_fields = Some(CompositeFields::parse(fields, overrides.rename_all)?);
+                (accepts::composite_body(&name, "ToSql"), composite_body())
             }
             _ => {
                 return Err(Error::new_spanned(
@@ -111,6 +106,14 @@ pub fn expand_derive_tosql(input: DeriveInput) -> Result<TokenStream, Error> {
     let ident = &input.ident;
     let generics = append_generic_bound(input.generics.to_owned(), &new_tosql_bound());
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let composite_impl = composite_fields.map(|fields| {
+        let body = composite_impl_body(&fields);
+        quote! {
+            impl #impl_generics postgres_types::ToSqlComposite for #ident #ty_generics #where_clause {
+                #body
+            }
+        }
+    });
     let out = quote! {
         impl #impl_generics postgres_types::ToSql for #ident #ty_generics #where_clause {
             fn to_sql(&self,
@@ -129,6 +132,8 @@ pub fn expand_derive_tosql(input: DeriveInput) -> Result<TokenStream, Error> {
 
             postgres_types::to_sql_checked!();
         }
+
+        #composite_impl
     };
 
     Ok(out)
@@ -168,46 +173,52 @@ fn domain_body() -> TokenStream {
     }
 }
 
-fn composite_body(fields: &[Field]) -> TokenStream {
-    let field_names = fields.iter().map(|f| &f.name);
-    let field_idents = fields.iter().map(|f| &f.ident);
+fn composite_body() -> TokenStream {
+    quote! {
+        postgres_types::private::composite_to_sql(self, _type, buf)
+    }
+}
+
+fn composite_impl_body(fields: &CompositeFields) -> TokenStream {
+    let num_fields = accepts::composite_num_fields("ToSql", fields);
+    let accepts_field_body = accepts::composite_field_body("ToSql", fields);
+    let field_names = fields.named.iter().map(|f| &f.name);
+    let field_idents = fields.named.iter().map(|f| &f.ident);
+    let flattened_idents = fields.flattened.iter().map(|f| &f.ident);
 
     quote! {
-        let fields = match *_type.kind() {
-            postgres_types::Kind::Composite(ref fields) => fields,
-            _ => unreachable!(),
-        };
+        const NUM_FIELDS: usize = #num_fields;
 
-        buf.extend_from_slice(&(fields.len() as i32).to_be_bytes());
-
-        for field in fields {
-            buf.extend_from_slice(&field.type_().oid().to_be_bytes());
-
-            let base = buf.len();
-            buf.extend_from_slice(&[0; 4]);
-            let r = match field.name() {
-                #(
-                    #field_names => postgres_types::ToSql::to_sql(&self.#field_idents, field.type_(), buf),
-                )*
-                _ => unreachable!(),
-            };
-
-            let count = match r? {
-                postgres_types::IsNull::Yes => -1,
-                postgres_types::IsNull::No => {
-                    let len = buf.len() - base - 4;
-                    if len > i32::MAX as usize {
-                        return std::result::Result::Err(
-                            std::convert::Into::into("value too large to transmit"));
-                    }
-                    len as i32
-                }
-            };
-
-            buf[base..base + 4].copy_from_slice(&count.to_be_bytes());
+        fn accepts_field(field: &postgres_types::Field) -> bool {
+            #accepts_field_body
         }
 
-        std::result::Result::Ok(postgres_types::IsNull::No)
+        fn field_to_sql(&self,
+                        field: &postgres_types::Field,
+                        buf: &mut postgres_types::private::BytesMut)
+                        -> std::option::Option<
+                            std::result::Result<postgres_types::IsNull,
+                                                std::boxed::Box<dyn std::error::Error +
+                                                                std::marker::Sync +
+                                                                std::marker::Send>>> {
+            match field.name() {
+                #(
+                    #field_names => std::option::Option::Some(
+                        postgres_types::ToSql::to_sql(&self.#field_idents, field.type_(), buf)),
+                )*
+                _ => {
+                    #(
+                        if let std::option::Option::Some(r) =
+                            postgres_types::ToSqlComposite::field_to_sql(&self.#flattened_idents, field, buf)
+                        {
+                            return std::option::Option::Some(r);
+                        }
+                    )*
+
+                    std::option::Option::None
+                }
+            }
+        }
     }
 }
 

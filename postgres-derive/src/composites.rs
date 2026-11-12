@@ -12,30 +12,67 @@ pub struct Field {
     pub type_: Type,
 }
 
-impl Field {
-    pub fn parse(raw: &syn::Field, rename_all: Option<RenameRule>) -> Result<Field, Error> {
-        let overrides = Overrides::extract(&raw.attrs, false)?;
-        let ident = raw.ident.as_ref().unwrap().clone();
+pub struct Flattened {
+    pub ident: Ident,
+    pub type_: Type,
+}
 
-        // field level name override takes precendence over container level rename_all override
-        let name = match overrides.name {
-            Some(n) => n,
-            None => {
-                let name = ident.to_string();
-                let stripped = name.strip_prefix("r#").map(String::from).unwrap_or(name);
+pub struct CompositeFields {
+    pub named: Vec<Field>,
+    pub flattened: Vec<Flattened>,
+}
 
-                match rename_all {
-                    Some(rule) => rule.apply_to_field(&stripped),
-                    None => stripped,
-                }
-            }
+impl CompositeFields {
+    pub fn parse(
+        raw: &syn::FieldsNamed,
+        rename_all: Option<RenameRule>,
+    ) -> Result<CompositeFields, Error> {
+        let mut fields = CompositeFields {
+            named: vec![],
+            flattened: vec![],
         };
 
-        Ok(Field {
-            name,
-            ident,
-            type_: raw.ty.clone(),
-        })
+        for field in &raw.named {
+            let overrides = Overrides::extract(&field.attrs, false)?;
+            let ident = field.ident.as_ref().unwrap().clone();
+
+            if overrides.flatten {
+                if overrides.name.is_some() {
+                    return Err(Error::new_spanned(
+                        field,
+                        "#[postgres(flatten)] is not allowed with #[postgres(name = \"...\")]",
+                    ));
+                }
+
+                fields.flattened.push(Flattened {
+                    ident,
+                    type_: field.ty.clone(),
+                });
+                continue;
+            }
+
+            // field level name override takes precendence over container level rename_all override
+            let name = match overrides.name {
+                Some(n) => n,
+                None => {
+                    let name = ident.to_string();
+                    let stripped = name.strip_prefix("r#").map(String::from).unwrap_or(name);
+
+                    match rename_all {
+                        Some(rule) => rule.apply_to_field(&stripped),
+                        None => stripped,
+                    }
+                }
+            };
+
+            fields.named.push(Field {
+                name,
+                ident,
+                type_: field.ty.clone(),
+            });
+        }
+
+        Ok(fields)
     }
 }
 

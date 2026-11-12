@@ -381,3 +381,525 @@ fn duplicate_composite_field_name_does_not_panic() {
 
     assert!(<Dup as FromSql>::from_sql(&ty, raw).is_err());
 }
+
+#[test]
+fn flatten() {
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct Cost {
+        price: Option<f64>,
+        currency: String,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct InventoryItem {
+        name: String,
+        supplier_id: i32,
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
+    conn.batch_execute(
+        "CREATE TYPE pg_temp.\"InventoryItem\" AS (
+            price DOUBLE PRECISION,
+            name TEXT,
+            currency TEXT,
+            supplier_id INT
+        );",
+    )
+    .unwrap();
+
+    let item = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: Some(15.50),
+            currency: "USD".to_owned(),
+        },
+    };
+
+    let item_null = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: None,
+            currency: "USD".to_owned(),
+        },
+    };
+
+    test_type(
+        &mut conn,
+        "\"InventoryItem\"",
+        &[
+            (item, "ROW(15.50, 'foobar', 'USD', 100)"),
+            (item_null, "ROW(NULL, 'foobar', 'USD', 100)"),
+        ],
+    );
+}
+
+#[test]
+fn flatten_multiple() {
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct Supplier {
+        supplier_id: i32,
+        supplier_name: String,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct Cost {
+        price: Option<f64>,
+        currency: String,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    #[postgres(name = "inventory_item")]
+    struct InventoryItem {
+        name: String,
+        #[postgres(flatten)]
+        supplier: Supplier,
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
+    conn.batch_execute(
+        "CREATE TYPE pg_temp.inventory_item AS (
+            name TEXT,
+            supplier_id INT,
+            supplier_name TEXT,
+            price DOUBLE PRECISION,
+            currency TEXT
+        );",
+    )
+    .unwrap();
+
+    let item = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier: Supplier {
+            supplier_id: 100,
+            supplier_name: "acme".to_owned(),
+        },
+        cost: Cost {
+            price: Some(15.50),
+            currency: "USD".to_owned(),
+        },
+    };
+
+    let item_null = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier: Supplier {
+            supplier_id: 100,
+            supplier_name: "acme".to_owned(),
+        },
+        cost: Cost {
+            price: None,
+            currency: "USD".to_owned(),
+        },
+    };
+
+    test_type(
+        &mut conn,
+        "inventory_item",
+        &[
+            (item, "ROW('foobar', 100, 'acme', 15.50, 'USD')"),
+            (item_null, "ROW('foobar', 100, 'acme', NULL, 'USD')"),
+        ],
+    );
+}
+
+#[test]
+fn flatten_nested() {
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct Currency {
+        currency: String,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct Cost {
+        price: Option<f64>,
+        #[postgres(flatten)]
+        currency: Currency,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    #[postgres(name = "inventory_item")]
+    struct InventoryItem {
+        name: String,
+        supplier_id: i32,
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
+    conn.batch_execute(
+        "CREATE TYPE pg_temp.inventory_item AS (
+            name TEXT,
+            supplier_id INT,
+            price DOUBLE PRECISION,
+            currency TEXT
+        );",
+    )
+    .unwrap();
+
+    let item = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: Some(15.50),
+            currency: Currency {
+                currency: "USD".to_owned(),
+            },
+        },
+    };
+
+    let item_null = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: None,
+            currency: Currency {
+                currency: "USD".to_owned(),
+            },
+        },
+    };
+
+    test_type(
+        &mut conn,
+        "inventory_item",
+        &[
+            (item, "ROW('foobar', 100, 15.50, 'USD')"),
+            (item_null, "ROW('foobar', 100, NULL, 'USD')"),
+        ],
+    );
+}
+
+#[test]
+fn flatten_name_overrides() {
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    #[postgres(name = "cost", rename_all = "SCREAMING_SNAKE_CASE")]
+    struct Cost {
+        price: Option<f64>,
+        #[postgres(name = "Currency")]
+        currency: String,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    #[postgres(name = "inventory_item")]
+    struct InventoryItem {
+        name: String,
+        supplier_id: i32,
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
+    conn.batch_execute(
+        "CREATE TYPE pg_temp.inventory_item AS (
+            name TEXT,
+            supplier_id INT,
+            \"PRICE\" DOUBLE PRECISION,
+            \"Currency\" TEXT
+        );",
+    )
+    .unwrap();
+
+    let item = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: Some(15.50),
+            currency: "USD".to_owned(),
+        },
+    };
+
+    let item_null = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: None,
+            currency: "USD".to_owned(),
+        },
+    };
+
+    test_type(
+        &mut conn,
+        "inventory_item",
+        &[
+            (item, "ROW('foobar', 100, 15.50, 'USD')"),
+            (item_null, "ROW('foobar', 100, NULL, 'USD')"),
+        ],
+    );
+}
+
+#[test]
+fn flatten_extra_field() {
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct Cost {
+        price: Option<f64>,
+        currency: String,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    #[postgres(name = "inventory_item")]
+    struct InventoryItem {
+        name: String,
+        supplier_id: i32,
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
+    conn.batch_execute(
+        "CREATE TYPE pg_temp.inventory_item AS (
+            name TEXT,
+            supplier_id INT,
+            price DOUBLE PRECISION
+        );",
+    )
+    .unwrap();
+
+    let item = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: Some(15.50),
+            currency: "USD".to_owned(),
+        },
+    };
+
+    let err = conn
+        .execute("SELECT $1::inventory_item", &[&item])
+        .unwrap_err();
+    assert!(err.source().unwrap().is::<WrongType>());
+}
+
+#[test]
+fn flatten_missing_field() {
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct Cost {
+        price: Option<f64>,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    #[postgres(name = "inventory_item")]
+    struct InventoryItem {
+        name: String,
+        supplier_id: i32,
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
+    conn.batch_execute(
+        "CREATE TYPE pg_temp.inventory_item AS (
+            name TEXT,
+            supplier_id INT,
+            price DOUBLE PRECISION,
+            currency TEXT
+        );",
+    )
+    .unwrap();
+
+    let item = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost { price: Some(15.50) },
+    };
+
+    let err = conn
+        .execute("SELECT $1::inventory_item", &[&item])
+        .unwrap_err();
+    assert!(err.source().unwrap().is::<WrongType>());
+}
+
+#[test]
+fn flatten_duplicate_field() {
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    struct Cost {
+        name: String,
+        price: Option<f64>,
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    #[postgres(name = "inventory_item")]
+    struct InventoryItem {
+        name: String,
+        supplier_id: i32,
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
+    conn.batch_execute(
+        "CREATE TYPE pg_temp.inventory_item AS (
+            name TEXT,
+            supplier_id INT,
+            price DOUBLE PRECISION,
+            currency TEXT
+        );",
+    )
+    .unwrap();
+
+    let item = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            name: "foobar".to_owned(),
+            price: Some(15.50),
+        },
+    };
+
+    let err = conn
+        .execute("SELECT $1::inventory_item", &[&item])
+        .unwrap_err();
+    assert!(err.source().unwrap().is::<WrongType>());
+}
+
+#[test]
+fn flatten_manual_impl() {
+    use bytes::BytesMut;
+    use postgres_types::{CompositeReader, Field, FromSqlComposite, IsNull, ToSqlComposite};
+
+    #[derive(Debug, PartialEq)]
+    struct Cost {
+        price: Option<f64>,
+        currency: String,
+    }
+
+    impl ToSqlComposite for Cost {
+        const NUM_FIELDS: usize = 2;
+
+        fn accepts_field(field: &Field) -> bool {
+            match field.name() {
+                "price" => <Option<f64> as ToSql>::accepts(field.type_()),
+                "currency" => <String as ToSql>::accepts(field.type_()),
+                _ => false,
+            }
+        }
+
+        fn field_to_sql(
+            &self,
+            field: &Field,
+            out: &mut BytesMut,
+        ) -> Option<Result<IsNull, Box<dyn Error + Sync + Send>>> {
+            match field.name() {
+                "price" => Some(self.price.to_sql(field.type_(), out)),
+                "currency" => Some(self.currency.to_sql(field.type_(), out)),
+                _ => None,
+            }
+        }
+    }
+
+    impl<'a> FromSqlComposite<'a> for Cost {
+        const NUM_FIELDS: usize = 2;
+
+        fn accepts_field(field: &Field) -> bool {
+            match field.name() {
+                "price" => <Option<f64> as FromSql>::accepts(field.type_()),
+                "currency" => <String as FromSql>::accepts(field.type_()),
+                _ => false,
+            }
+        }
+
+        fn from_sql_fields(
+            reader: &mut CompositeReader<'_, 'a>,
+        ) -> Result<Cost, Box<dyn Error + Sync + Send>> {
+            Ok(Cost {
+                price: reader.get("price")?,
+                currency: reader.get("currency")?,
+            })
+        }
+    }
+
+    #[derive(FromSql, ToSql, Debug, PartialEq)]
+    #[postgres(name = "inventory_item")]
+    struct InventoryItem {
+        name: String,
+        supplier_id: i32,
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
+    conn.batch_execute(
+        "CREATE TYPE pg_temp.inventory_item AS (
+            name TEXT,
+            supplier_id INT,
+            price DOUBLE PRECISION,
+            currency TEXT
+        );",
+    )
+    .unwrap();
+
+    let item = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: Some(15.50),
+            currency: "USD".to_owned(),
+        },
+    };
+
+    let item_null = InventoryItem {
+        name: "foobar".to_owned(),
+        supplier_id: 100,
+        cost: Cost {
+            price: None,
+            currency: "USD".to_owned(),
+        },
+    };
+
+    test_type(
+        &mut conn,
+        "inventory_item",
+        &[
+            (item, "ROW('foobar', 100, 15.50, 'USD')"),
+            (item_null, "ROW('foobar', 100, NULL, 'USD')"),
+        ],
+    );
+}
+
+#[test]
+fn flatten_field_to_sql_none_does_not_panic() {
+    use bytes::BytesMut;
+    use postgres_types::{Field, IsNull, Kind, ToSqlComposite, Type};
+
+    #[derive(Debug)]
+    struct Cost;
+
+    impl ToSqlComposite for Cost {
+        const NUM_FIELDS: usize = 1;
+
+        fn accepts_field(field: &Field) -> bool {
+            field.name() == "price"
+        }
+
+        fn field_to_sql(
+            &self,
+            _: &Field,
+            _: &mut BytesMut,
+        ) -> Option<Result<IsNull, Box<dyn Error + Sync + Send>>> {
+            None
+        }
+    }
+
+    #[derive(ToSql, Debug)]
+    struct InventoryItem {
+        #[postgres(flatten)]
+        cost: Cost,
+    }
+
+    let ty = Type::new(
+        "InventoryItem".to_string(),
+        0,
+        Kind::Composite(vec![Field::new("price".to_string(), Type::FLOAT8)]),
+        "public".to_string(),
+    );
+
+    assert!(<InventoryItem as ToSql>::accepts(&ty));
+    assert!(
+        InventoryItem { cost: Cost }
+            .to_sql(&ty, &mut BytesMut::new())
+            .is_err()
+    );
+}

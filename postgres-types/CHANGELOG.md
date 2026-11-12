@@ -1,5 +1,11 @@
 # Change Log
 
+## Unreleased
+
+### Added
+
+* Added `ToSqlComposite` and `FromSqlComposite` traits and the `CompositeReader` type.
+
 ## v0.2.14 - 2026-06-12
 
 ### Added
