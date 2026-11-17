@@ -1,6 +1,4 @@
-use crate::{
-    CompositeReader, Field, FromSql, FromSqlComposite, IsNull, Kind, ToSqlComposite, Type,
-};
+use crate::{Field, FromSql, IsNull, Kind, Type};
 pub use bytes::BytesMut;
 use std::error::Error;
 
@@ -23,6 +21,72 @@ where
 {
     let value = read_raw_value(buf)?;
     T::from_sql_nullable(type_, value)
+}
+
+pub trait ToSqlComposite {
+    const NUM_FIELDS: usize;
+
+    fn accepts_field(field: &Field) -> bool;
+
+    fn field_to_sql(
+        &self,
+        field: &Field,
+        out: &mut BytesMut,
+    ) -> Option<Result<IsNull, Box<dyn Error + Sync + Send>>>;
+}
+
+pub trait FromSqlComposite<'a>: Sized {
+    const NUM_FIELDS: usize;
+
+    fn accepts_field(field: &Field) -> bool;
+
+    fn from_sql_fields(
+        reader: &mut CompositeReader<'_, 'a>,
+    ) -> Result<Self, Box<dyn Error + Sync + Send>>;
+}
+
+pub struct CompositeReader<'f, 'a> {
+    fields: &'f [Field],
+    raw: &'a [u8],
+    index: usize,
+    rest: &'a [u8],
+}
+
+impl<'f, 'a> CompositeReader<'f, 'a> {
+    fn new(fields: &'f [Field], raw: &'a [u8]) -> CompositeReader<'f, 'a> {
+        CompositeReader {
+            fields,
+            raw,
+            index: 0,
+            rest: raw,
+        }
+    }
+
+    pub fn get<T>(&mut self, name: &str) -> Result<T, Box<dyn Error + Sync + Send>>
+    where
+        T: FromSql<'a>,
+    {
+        for _ in 0..self.fields.len() {
+            if self.index == self.fields.len() {
+                self.index = 0;
+                self.rest = self.raw;
+            }
+
+            let field = &self.fields[self.index];
+            let oid = read_be_i32(&mut self.rest)? as u32;
+            if oid != field.type_().oid() {
+                return Err("unexpected OID".into());
+            }
+            let value = read_raw_value(&mut self.rest)?;
+            self.index += 1;
+
+            if field.name() == name {
+                return T::from_sql_nullable(field.type_(), value);
+            }
+        }
+
+        Err("composite type is missing a field".into())
+    }
 }
 
 pub fn composite_accepts(
@@ -102,7 +166,7 @@ where
     T::from_sql_fields(&mut CompositeReader::new(fields, buf))
 }
 
-pub(crate) fn read_raw_value<'a>(
+fn read_raw_value<'a>(
     buf: &mut &'a [u8],
 ) -> Result<Option<&'a [u8]>, Box<dyn Error + Sync + Send>> {
     let len = read_be_i32(buf)?;

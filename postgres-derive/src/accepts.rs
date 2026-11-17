@@ -73,8 +73,8 @@ pub fn composite_body(name: &str, trait_: &str) -> TokenStream {
         ::postgres_types::private::composite_accepts(
             type_,
             #name,
-            <Self as ::postgres_types::#composite_trait>::NUM_FIELDS,
-            <Self as ::postgres_types::#composite_trait>::accepts_field,
+            <Self as ::postgres_types::private::#composite_trait>::NUM_FIELDS,
+            <Self as ::postgres_types::private::#composite_trait>::accepts_field,
         )
     }
 }
@@ -86,7 +86,7 @@ pub fn composite_num_fields(trait_: &str, fields: &CompositeFields) -> TokenStre
 
     quote! {
         #num_named #(
-            + <#flattened_types as ::postgres_types::#composite_trait>::NUM_FIELDS
+            + <#flattened_types as ::postgres_types::private::#composite_trait>::NUM_FIELDS
         )*
     }
 }
@@ -108,7 +108,7 @@ pub fn composite_field_body(trait_: &str, fields: &CompositeFields) -> TokenStre
             )*
             _ => {
                 false #(
-                    || <#flattened_types as ::postgres_types::#composite_trait>::accepts_field(field)
+                    || <#flattened_types as ::postgres_types::private::#composite_trait>::accepts_field(field)
                 )*
             }
         }

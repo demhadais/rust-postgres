@@ -1,5 +1,5 @@
 use proc_macro2::{Span, TokenStream};
-use quote::{format_ident, quote};
+use quote::quote;
 use std::iter;
 use syn::{
     AngleBracketedGenericArguments, Data, DataStruct, DeriveInput, Error, Fields, GenericArgument,
@@ -116,7 +116,7 @@ pub fn expand_derive_fromsql(input: DeriveInput) -> Result<TokenStream, Error> {
     let composite_impl = composite_fields.map(|fields| {
         let body = composite_impl_body(ident, &fields, &lifetime);
         quote! {
-            impl #impl_generics postgres_types::FromSqlComposite<#lifetime> for #ident #ty_generics #where_clause {
+            impl #impl_generics postgres_types::private::FromSqlComposite<#lifetime> for #ident #ty_generics #where_clause {
                 #body
             }
         }
@@ -216,7 +216,7 @@ fn composite_impl_body(
             #accepts_field_body
         }
 
-        fn from_sql_fields(reader: &mut postgres_types::CompositeReader<'_, #lifetime>)
+        fn from_sql_fields(reader: &mut postgres_types::private::CompositeReader<'_, #lifetime>)
                            -> std::result::Result<Self,
                                                   std::boxed::Box<dyn std::error::Error +
                                                                   std::marker::Sync +
@@ -226,7 +226,7 @@ fn composite_impl_body(
                     #field_idents: reader.get(#field_names)?,
                 )*
                 #(
-                    #flattened_idents: <#flattened_types as postgres_types::FromSqlComposite<#lifetime>>::from_sql_fields(reader)?,
+                    #flattened_idents: <#flattened_types as postgres_types::private::FromSqlComposite<#lifetime>>::from_sql_fields(reader)?,
                 )*
             })
         }

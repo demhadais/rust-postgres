@@ -184,9 +184,7 @@
 //!
 //! ## Flattening Composites
 //!
-//! The `#[postgres(flatten)]` attribute can be used on a field of a struct to treat the fields of the field's type as
-//! fields of the struct's Postgres composite type. The field's type must implement [`ToSqlComposite`] &
-//! [`FromSqlComposite`], which the generated implementations of [`ToSql`] & [`FromSql`] for structs do:
+//! The `#[postgres(flatten)]` attribute can be used to “flatten” the contents of a struct field into its parent container:
 //!
 //! ```sql
 //! CREATE TYPE "InventoryItem" AS (
@@ -217,8 +215,6 @@
 //!     cost: Cost,
 //! }
 //! ```
-//!
-//! The fields are matched by name, and the name of the flattened type is not used.
 #![warn(clippy::all, rust_2018_idioms, missing_docs)]
 use fallible_iterator::FallibleIterator;
 use postgres_protocol::types::{self, ArrayDimension};
@@ -617,83 +613,6 @@ pub trait FromSqlOwned: for<'a> FromSql<'a> {}
 
 impl<T> FromSqlOwned for T where T: for<'a> FromSql<'a> {}
 
-/// A trait for types that can be created from the fields of a Postgres
-/// composite value.
-///
-/// A type implementing this trait can be used as the type of a field annotated
-/// with `#[postgres(flatten)]` in a struct deriving `FromSql`. Deriving
-/// `FromSql` on a struct with named fields also implements this trait.
-pub trait FromSqlComposite<'a>: Sized {
-    /// The number of fields of a Postgres composite type that a value of this
-    /// type is created from.
-    ///
-    /// This must be equal to the number of field names that `accepts_field`
-    /// accepts.
-    const NUM_FIELDS: usize;
-
-    /// Determines if part of a value of this type can be created from the
-    /// specified field of a Postgres composite type.
-    fn accepts_field(field: &Field) -> bool;
-
-    /// Creates a new value of this type from the fields of a Postgres
-    /// composite value.
-    ///
-    /// The caller of this method is responsible for ensuring that this type
-    /// is compatible with the fields of the composite value.
-    fn from_sql_fields(
-        reader: &mut CompositeReader<'_, 'a>,
-    ) -> Result<Self, Box<dyn Error + Sync + Send>>;
-}
-
-/// A reader of the fields of a Postgres composite value in its binary format.
-pub struct CompositeReader<'f, 'a> {
-    fields: &'f [Field],
-    raw: &'a [u8],
-    index: usize,
-    rest: &'a [u8],
-}
-
-impl<'f, 'a> CompositeReader<'f, 'a> {
-    pub(crate) fn new(fields: &'f [Field], raw: &'a [u8]) -> CompositeReader<'f, 'a> {
-        CompositeReader {
-            fields,
-            raw,
-            index: 0,
-            rest: raw,
-        }
-    }
-
-    /// Creates a new value from the field with the specified name.
-    ///
-    /// The caller of this method is responsible for ensuring that `T` is
-    /// compatible with the Postgres `Type` of the field.
-    pub fn get<T>(&mut self, name: &str) -> Result<T, Box<dyn Error + Sync + Send>>
-    where
-        T: FromSql<'a>,
-    {
-        for _ in 0..self.fields.len() {
-            if self.index == self.fields.len() {
-                self.index = 0;
-                self.rest = self.raw;
-            }
-
-            let field = &self.fields[self.index];
-            let oid = private::read_be_i32(&mut self.rest)? as u32;
-            if oid != field.type_().oid() {
-                return Err("unexpected OID".into());
-            }
-            let value = private::read_raw_value(&mut self.rest)?;
-            self.index += 1;
-
-            if field.name() == name {
-                return T::from_sql_nullable(field.type_(), value);
-            }
-        }
-
-        Err("composite type is missing a field".into())
-    }
-}
-
 impl<'a, T: FromSql<'a>> FromSql<'a> for Option<T> {
     fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<Option<T>, Box<dyn Error + Sync + Send>> {
         <T as FromSql>::from_sql(ty, raw).map(Some)
@@ -1051,43 +970,6 @@ pub trait ToSql: fmt::Debug {
     fn encode_format(&self, _ty: &Type) -> Format {
         Format::Binary
     }
-}
-
-/// A trait for types that can be converted into the fields of a Postgres
-/// composite value.
-///
-/// A type implementing this trait can be used as the type of a field annotated
-/// with `#[postgres(flatten)]` in a struct deriving `ToSql`. Deriving `ToSql`
-/// on a struct with named fields also implements this trait.
-pub trait ToSqlComposite {
-    /// The number of fields of a Postgres composite type that a value of this
-    /// type is converted into.
-    ///
-    /// This must be equal to the number of field names that `accepts_field`
-    /// accepts.
-    const NUM_FIELDS: usize;
-
-    /// Determines if part of a value of this type can be converted to the
-    /// specified field of a Postgres composite type.
-    fn accepts_field(field: &Field) -> bool;
-
-    /// Converts the part of `self` corresponding to the specified field of a
-    /// Postgres composite type into the binary format of the field's type,
-    /// appending it to `out`.
-    ///
-    /// The caller of this method is responsible for ensuring that this type
-    /// is compatible with the field.
-    ///
-    /// The return value is `None` if the field is not part of this type. If
-    /// this is the case, implementations **must not** write anything to `out`.
-    /// Otherwise, the return value indicates if the field's value should be
-    /// represented as `NULL`, in which case implementations **must not** write
-    /// anything to `out` either.
-    fn field_to_sql(
-        &self,
-        field: &Field,
-        out: &mut BytesMut,
-    ) -> Option<Result<IsNull, Box<dyn Error + Sync + Send>>>;
 }
 
 /// Supported Postgres message format types

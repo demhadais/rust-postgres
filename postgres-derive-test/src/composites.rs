@@ -756,149 +756,24 @@ fn flatten_duplicate_field() {
 }
 
 #[test]
-fn flatten_manual_impl() {
-    use bytes::BytesMut;
-    use postgres_types::{CompositeReader, Field, FromSqlComposite, IsNull, ToSqlComposite};
-
-    #[derive(Debug, PartialEq)]
-    struct Cost {
-        price: Option<f64>,
-        currency: String,
-    }
-
-    impl ToSqlComposite for Cost {
-        const NUM_FIELDS: usize = 2;
-
-        fn accepts_field(field: &Field) -> bool {
-            match field.name() {
-                "price" => <Option<f64> as ToSql>::accepts(field.type_()),
-                "currency" => <String as ToSql>::accepts(field.type_()),
-                _ => false,
-            }
-        }
-
-        fn field_to_sql(
-            &self,
-            field: &Field,
-            out: &mut BytesMut,
-        ) -> Option<Result<IsNull, Box<dyn Error + Sync + Send>>> {
-            match field.name() {
-                "price" => Some(self.price.to_sql(field.type_(), out)),
-                "currency" => Some(self.currency.to_sql(field.type_(), out)),
-                _ => None,
-            }
-        }
-    }
-
-    impl<'a> FromSqlComposite<'a> for Cost {
-        const NUM_FIELDS: usize = 2;
-
-        fn accepts_field(field: &Field) -> bool {
-            match field.name() {
-                "price" => <Option<f64> as FromSql>::accepts(field.type_()),
-                "currency" => <String as FromSql>::accepts(field.type_()),
-                _ => false,
-            }
-        }
-
-        fn from_sql_fields(
-            reader: &mut CompositeReader<'_, 'a>,
-        ) -> Result<Cost, Box<dyn Error + Sync + Send>> {
-            Ok(Cost {
-                price: reader.get("price")?,
-                currency: reader.get("currency")?,
-            })
-        }
-    }
-
-    #[derive(FromSql, ToSql, Debug, PartialEq)]
-    #[postgres(name = "inventory_item")]
-    struct InventoryItem {
-        name: String,
-        supplier_id: i32,
-        #[postgres(flatten)]
-        cost: Cost,
-    }
-
-    let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
-    conn.batch_execute(
-        "CREATE TYPE pg_temp.inventory_item AS (
-            name TEXT,
-            supplier_id INT,
-            price DOUBLE PRECISION,
-            currency TEXT
-        );",
-    )
-    .unwrap();
-
-    let item = InventoryItem {
-        name: "foobar".to_owned(),
-        supplier_id: 100,
-        cost: Cost {
-            price: Some(15.50),
-            currency: "USD".to_owned(),
-        },
-    };
-
-    let item_null = InventoryItem {
-        name: "foobar".to_owned(),
-        supplier_id: 100,
-        cost: Cost {
-            price: None,
-            currency: "USD".to_owned(),
-        },
-    };
-
-    test_type(
-        &mut conn,
-        "inventory_item",
-        &[
-            (item, "ROW('foobar', 100, 15.50, 'USD')"),
-            (item_null, "ROW('foobar', 100, NULL, 'USD')"),
-        ],
-    );
-}
-
-#[test]
-fn flatten_field_to_sql_none_does_not_panic() {
-    use bytes::BytesMut;
-    use postgres_types::{Field, IsNull, Kind, ToSqlComposite, Type};
-
-    #[derive(Debug)]
-    struct Cost;
-
-    impl ToSqlComposite for Cost {
-        const NUM_FIELDS: usize = 1;
-
-        fn accepts_field(field: &Field) -> bool {
-            field.name() == "price"
-        }
-
-        fn field_to_sql(
-            &self,
-            _: &Field,
-            _: &mut BytesMut,
-        ) -> Option<Result<IsNull, Box<dyn Error + Sync + Send>>> {
-            None
-        }
-    }
+fn unexpected_field_does_not_panic() {
+    use postgres_types::private::BytesMut;
+    use postgres_types::{Field, Kind, Type};
 
     #[derive(ToSql, Debug)]
     struct InventoryItem {
-        #[postgres(flatten)]
-        cost: Cost,
+        price: f64,
     }
 
     let ty = Type::new(
         "InventoryItem".to_string(),
         0,
-        Kind::Composite(vec![Field::new("price".to_string(), Type::FLOAT8)]),
+        Kind::Composite(vec![Field::new("cost".to_string(), Type::FLOAT8)]),
         "public".to_string(),
     );
 
-    assert!(<InventoryItem as ToSql>::accepts(&ty));
     assert!(
-        InventoryItem { cost: Cost }
+        InventoryItem { price: 1.0 }
             .to_sql(&ty, &mut BytesMut::new())
             .is_err()
     );

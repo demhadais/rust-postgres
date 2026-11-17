@@ -109,7 +109,7 @@ pub fn expand_derive_tosql(input: DeriveInput) -> Result<TokenStream, Error> {
     let composite_impl = composite_fields.map(|fields| {
         let body = composite_impl_body(&fields);
         quote! {
-            impl #impl_generics postgres_types::ToSqlComposite for #ident #ty_generics #where_clause {
+            impl #impl_generics postgres_types::private::ToSqlComposite for #ident #ty_generics #where_clause {
                 #body
             }
         }
@@ -209,7 +209,7 @@ fn composite_impl_body(fields: &CompositeFields) -> TokenStream {
                 _ => {
                     #(
                         if let std::option::Option::Some(r) =
-                            postgres_types::ToSqlComposite::field_to_sql(&self.#flattened_idents, field, buf)
+                            postgres_types::private::ToSqlComposite::field_to_sql(&self.#flattened_idents, field, buf)
                         {
                             return std::option::Option::Some(r);
                         }
