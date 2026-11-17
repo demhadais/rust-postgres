@@ -175,23 +175,48 @@ fn domain_body() -> TokenStream {
 
 fn composite_body() -> TokenStream {
     quote! {
-        postgres_types::private::composite_to_sql(self, _type, buf)
+        let fields = match *_type.kind() {
+            postgres_types::Kind::Composite(ref fields) => fields,
+            _ => unreachable!(),
+        };
+
+        buf.extend_from_slice(&(fields.len() as i32).to_be_bytes());
+
+        for field in fields {
+            buf.extend_from_slice(&field.type_().oid().to_be_bytes());
+
+            let base = buf.len();
+            buf.extend_from_slice(&[0; 4]);
+            let r = postgres_types::private::ToSqlComposite::field_to_sql(self, field, buf)
+                .ok_or("composite type has an unexpected field")?;
+
+            let count = match r? {
+                postgres_types::IsNull::Yes => -1,
+                postgres_types::IsNull::No => {
+                    let len = buf.len() - base - 4;
+                    if len > i32::MAX as usize {
+                        return std::result::Result::Err(
+                            std::convert::Into::into("value too large to transmit"));
+                    }
+                    len as i32
+                }
+            };
+
+            buf[base..base + 4].copy_from_slice(&count.to_be_bytes());
+        }
+
+        std::result::Result::Ok(postgres_types::IsNull::No)
     }
 }
 
 fn composite_impl_body(fields: &CompositeFields) -> TokenStream {
-    let num_fields = accepts::composite_num_fields("ToSql", fields);
-    let accepts_field_body = accepts::composite_field_body("ToSql", fields);
+    let items = accepts::composite_items("ToSql", fields);
     let field_names = fields.named.iter().map(|f| &f.name);
     let field_idents = fields.named.iter().map(|f| &f.ident);
     let flattened_idents = fields.flattened.iter().map(|f| &f.ident);
 
     quote! {
-        const NUM_FIELDS: usize = #num_fields;
-
-        fn accepts_field(field: &postgres_types::Field) -> bool {
-            #accepts_field_body
-        }
+        #items
 
         fn field_to_sql(&self,
                         field: &postgres_types::Field,
@@ -206,17 +231,9 @@ fn composite_impl_body(fields: &CompositeFields) -> TokenStream {
                     #field_names => std::option::Option::Some(
                         postgres_types::ToSql::to_sql(&self.#field_idents, field.type_(), buf)),
                 )*
-                _ => {
-                    #(
-                        if let std::option::Option::Some(r) =
-                            postgres_types::private::ToSqlComposite::field_to_sql(&self.#flattened_idents, field, buf)
-                        {
-                            return std::option::Option::Some(r);
-                        }
-                    )*
-
-                    std::option::Option::None
-                }
+                _ => std::option::Option::None #(
+                    .or_else(|| postgres_types::private::ToSqlComposite::field_to_sql(&self.#flattened_idents, field, buf))
+                )*,
             }
         }
     }

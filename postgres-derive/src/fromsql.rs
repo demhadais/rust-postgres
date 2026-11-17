@@ -193,7 +193,19 @@ fn domain_body(ident: &Ident, field: &syn::Field) -> TokenStream {
 
 fn composite_body() -> TokenStream {
     quote! {
-        postgres_types::private::composite_from_sql(_type, buf)
+        let fields = match *_type.kind() {
+            postgres_types::Kind::Composite(ref fields) => fields,
+            _ => unreachable!(),
+        };
+
+        let mut buf = buf;
+        let num_fields = postgres_types::private::read_be_i32(&mut buf)?;
+        if num_fields as usize != fields.len() {
+            return std::result::Result::Err(
+                std::convert::Into::into(format!("invalid field count: {} vs {}", num_fields, fields.len())));
+        }
+
+        postgres_types::private::FromSqlComposite::from_sql_fields(fields, buf)
     }
 }
 
@@ -202,31 +214,25 @@ fn composite_impl_body(
     fields: &CompositeFields,
     lifetime: &Lifetime,
 ) -> TokenStream {
-    let num_fields = accepts::composite_num_fields("FromSql", fields);
-    let accepts_field_body = accepts::composite_field_body("FromSql", fields);
+    let items = accepts::composite_items("FromSql", fields);
     let field_names = fields.named.iter().map(|f| &f.name);
     let field_idents = fields.named.iter().map(|f| &f.ident);
     let flattened_idents = fields.flattened.iter().map(|f| &f.ident);
-    let flattened_types = fields.flattened.iter().map(|f| &f.type_);
 
     quote! {
-        const NUM_FIELDS: usize = #num_fields;
+        #items
 
-        fn accepts_field(field: &postgres_types::Field) -> bool {
-            #accepts_field_body
-        }
-
-        fn from_sql_fields(reader: &mut postgres_types::private::CompositeReader<'_, #lifetime>)
+        fn from_sql_fields(fields: &[postgres_types::Field], buf: &#lifetime [u8])
                            -> std::result::Result<Self,
                                                   std::boxed::Box<dyn std::error::Error +
                                                                   std::marker::Sync +
                                                                   std::marker::Send>> {
             std::result::Result::Ok(#ident {
                 #(
-                    #field_idents: reader.get(#field_names)?,
+                    #field_idents: postgres_types::private::read_field(fields, buf, #field_names)?,
                 )*
                 #(
-                    #flattened_idents: <#flattened_types as postgres_types::private::FromSqlComposite<#lifetime>>::from_sql_fields(reader)?,
+                    #flattened_idents: postgres_types::private::FromSqlComposite::from_sql_fields(fields, buf)?,
                 )*
             })
         }

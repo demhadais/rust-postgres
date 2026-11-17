@@ -398,6 +398,7 @@ fn flatten() {
         cost: Cost,
     }
 
+    // Note that the order of the fields is different between the Rust struct and the postgres composite type, but it still works
     let mut conn = Client::connect("user=postgres host=localhost port=5433", NoTls).unwrap();
     conn.batch_execute(
         "CREATE TYPE pg_temp.\"InventoryItem\" AS (
@@ -511,7 +512,8 @@ fn flatten_multiple() {
 fn flatten_nested() {
     #[derive(FromSql, ToSql, Debug, PartialEq)]
     struct Currency {
-        currency: String,
+        currency_name: String,
+        currency_country: String,
     }
 
     #[derive(FromSql, ToSql, Debug, PartialEq)]
@@ -536,7 +538,8 @@ fn flatten_nested() {
             name TEXT,
             supplier_id INT,
             price DOUBLE PRECISION,
-            currency TEXT
+            currency_name TEXT,
+            currency_country TEXT
         );",
     )
     .unwrap();
@@ -547,7 +550,8 @@ fn flatten_nested() {
         cost: Cost {
             price: Some(15.50),
             currency: Currency {
-                currency: "USD".to_owned(),
+                currency_name: "USD".to_owned(),
+                currency_country: "United States of America".to_owned(),
             },
         },
     };
@@ -558,7 +562,8 @@ fn flatten_nested() {
         cost: Cost {
             price: None,
             currency: Currency {
-                currency: "USD".to_owned(),
+                currency_name: "USD".to_owned(),
+                currency_country: "United States of America".to_owned(),
             },
         },
     };
@@ -567,8 +572,14 @@ fn flatten_nested() {
         &mut conn,
         "inventory_item",
         &[
-            (item, "ROW('foobar', 100, 15.50, 'USD')"),
-            (item_null, "ROW('foobar', 100, NULL, 'USD')"),
+            (
+                item,
+                "ROW('foobar', 100, 15.50, 'USD', 'United States of America')",
+            ),
+            (
+                item_null,
+                "ROW('foobar', 100, NULL, 'USD', 'United States of America')",
+            ),
         ],
     );
 }
