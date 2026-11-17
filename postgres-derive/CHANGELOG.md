@@ -1,5 +1,11 @@
 # Change Log
 
+## Unreleased
+
+### Added
+
+* Added a `#[postgres(flatten)]` attribute for fields of composite structs.
+
 ## v0.4.9 - 2026-06-12
 
 ### Fixed

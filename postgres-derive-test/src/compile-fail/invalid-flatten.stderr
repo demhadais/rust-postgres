@@ -1,0 +1,39 @@
+error: flatten is a field attribute
+ --> src/compile-fail/invalid-flatten.rs:4:12
+  |
+4 | #[postgres(flatten)]
+  |            ^^^^^^^
+
+error: flatten is a field attribute
+  --> src/compile-fail/invalid-flatten.rs:10:12
+   |
+10 | #[postgres(flatten)]
+   |            ^^^^^^^
+
+error: #[postgres(flatten)] may only be applied to struct fields
+  --> src/compile-fail/invalid-flatten.rs:17:5
+   |
+17 | /     #[postgres(flatten)]
+18 | |     Foo,
+   | |_______^
+
+error: #[postgres(flatten)] may only be applied to struct fields
+  --> src/compile-fail/invalid-flatten.rs:23:5
+   |
+23 | /     #[postgres(flatten)]
+24 | |     Foo,
+   | |_______^
+
+error: #[postgres(flatten)] is not allowed with #[postgres(name = "...")]
+  --> src/compile-fail/invalid-flatten.rs:29:5
+   |
+29 | /     #[postgres(flatten, name = "b")]
+30 | |     a: i32,
+   | |__________^
+
+error: #[postgres(flatten)] is not allowed with #[postgres(name = "...")]
+  --> src/compile-fail/invalid-flatten.rs:35:5
+   |
+35 | /     #[postgres(flatten, name = "b")]
+36 | |     a: i32,
+   | |__________^

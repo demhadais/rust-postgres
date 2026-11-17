@@ -1,9 +1,9 @@
 use proc_macro2::{Span, TokenStream};
-use quote::quote;
+use quote::{format_ident, quote};
 use std::iter;
 use syn::Ident;
 
-use crate::composites::Field;
+use crate::composites::CompositeFields;
 use crate::enums::Variant;
 
 pub fn transparent_body(field: &syn::Field) -> TokenStream {
@@ -66,12 +66,8 @@ pub fn enum_body(name: &str, variants: &[Variant], allow_mismatch: bool) -> Toke
     }
 }
 
-pub fn composite_body(name: &str, trait_: &str, fields: &[Field]) -> TokenStream {
-    let num_fields = fields.len();
-    let trait_ = Ident::new(trait_, Span::call_site());
-    let traits = iter::repeat(&trait_);
-    let field_names = fields.iter().map(|f| &f.name);
-    let field_types = fields.iter().map(|f| &f.type_);
+pub fn composite_body(name: &str, trait_: &str) -> TokenStream {
+    let composite_trait = format_ident!("{}Composite", trait_);
 
     quote! {
         if type_.name() != #name {
@@ -80,22 +76,42 @@ pub fn composite_body(name: &str, trait_: &str, fields: &[Field]) -> TokenStream
 
         match *type_.kind() {
             ::postgres_types::Kind::Composite(ref fields) => {
-                if fields.len() != #num_fields {
+                if fields.len() != <Self as ::postgres_types::private::#composite_trait>::NUM_FIELDS {
                     return false;
                 }
 
-                fields.iter().all(|f| {
-                    match f.name() {
-                        #(
-                            #field_names => {
-                                <#field_types as ::postgres_types::#traits>::accepts(f.type_())
-                            }
-                        )*
-                        _ => false,
-                    }
-                })
+                fields.iter().all(<Self as ::postgres_types::private::#composite_trait>::accepts_field)
             }
             _ => false,
+        }
+    }
+}
+
+pub fn composite_items(trait_: &str, fields: &CompositeFields) -> TokenStream {
+    let composite_trait = format_ident!("{}Composite", trait_);
+    let num_fields = fields.named.len();
+    let trait_ = Ident::new(trait_, Span::call_site());
+    let traits = iter::repeat(&trait_);
+    let field_names = fields.named.iter().map(|f| &f.name);
+    let field_types = fields.named.iter().map(|f| &f.type_);
+    let flattened_types = &fields.flattened.iter().map(|f| &f.type_).collect::<Vec<_>>();
+
+    quote! {
+        const NUM_FIELDS: usize = #num_fields #(
+            + <#flattened_types as ::postgres_types::private::#composite_trait>::NUM_FIELDS
+        )*;
+
+        fn accepts_field(f: &::postgres_types::Field) -> bool {
+            match f.name() {
+                #(
+                    #field_names => {
+                        <#field_types as ::postgres_types::#traits>::accepts(f.type_())
+                    }
+                )*
+                _ => false #(
+                    || <#flattened_types as ::postgres_types::private::#composite_trait>::accepts_field(f)
+                )*,
+            }
         }
     }
 }

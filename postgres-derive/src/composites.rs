@@ -13,8 +13,7 @@ pub struct Field {
 }
 
 impl Field {
-    pub fn parse(raw: &syn::Field, rename_all: Option<RenameRule>) -> Result<Field, Error> {
-        let overrides = Overrides::extract(&raw.attrs, false)?;
+    fn parse(raw: &syn::Field, overrides: Overrides, rename_all: Option<RenameRule>) -> Field {
         let ident = raw.ident.as_ref().unwrap().clone();
 
         // field level name override takes precendence over container level rename_all override
@@ -31,11 +30,55 @@ impl Field {
             }
         };
 
-        Ok(Field {
+        Field {
             name,
             ident,
             type_: raw.ty.clone(),
-        })
+        }
+    }
+}
+
+pub struct Flattened {
+    pub ident: Ident,
+    pub type_: Type,
+}
+
+pub struct CompositeFields {
+    pub named: Vec<Field>,
+    pub flattened: Vec<Flattened>,
+}
+
+impl CompositeFields {
+    pub fn parse(
+        raw: &syn::FieldsNamed,
+        rename_all: Option<RenameRule>,
+    ) -> Result<CompositeFields, Error> {
+        let mut fields = CompositeFields {
+            named: vec![],
+            flattened: vec![],
+        };
+
+        for field in &raw.named {
+            let overrides = Overrides::extract(&field.attrs, false)?;
+
+            if overrides.flatten {
+                if overrides.name.is_some() {
+                    return Err(Error::new_spanned(
+                        field,
+                        "#[postgres(flatten)] is not allowed with #[postgres(name = \"...\")]",
+                    ));
+                }
+
+                fields.flattened.push(Flattened {
+                    ident: field.ident.as_ref().unwrap().clone(),
+                    type_: field.ty.clone(),
+                });
+            } else {
+                fields.named.push(Field::parse(field, overrides, rename_all));
+            }
+        }
+
+        Ok(fields)
     }
 }
 

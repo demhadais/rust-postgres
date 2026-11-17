@@ -181,6 +181,40 @@
 //!    Meh,
 //! }
 //! ```
+//!
+//! ## Flattening Composites
+//!
+//! The `#[postgres(flatten)]` attribute can be used to “flatten” the contents of a struct field into its parent container:
+//!
+//! ```sql
+//! CREATE TYPE "InventoryItem" AS (
+//!     name TEXT,
+//!     supplier_id INT,
+//!     price DOUBLE PRECISION,
+//!     currency TEXT
+//! );
+//! ```
+//!
+//! ```rust
+//! # #[cfg(feature = "derive")]
+//! use postgres_types::{ToSql, FromSql};
+//!
+//! # #[cfg(feature = "derive")]
+//! #[derive(Debug, ToSql, FromSql)]
+//! struct Cost {
+//!     price: Option<f64>,
+//!     currency: String,
+//! }
+//!
+//! # #[cfg(feature = "derive")]
+//! #[derive(Debug, ToSql, FromSql)]
+//! struct InventoryItem {
+//!     name: String,
+//!     supplier_id: i32,
+//!     #[postgres(flatten)]
+//!     cost: Cost,
+//! }
+//! ```
 #![warn(clippy::all, rust_2018_idioms, missing_docs)]
 use fallible_iterator::FallibleIterator;
 use postgres_protocol::types::{self, ArrayDimension};

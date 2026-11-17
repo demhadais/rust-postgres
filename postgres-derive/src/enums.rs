@@ -20,6 +20,13 @@ impl Variant {
         }
         let overrides = Overrides::extract(&raw.attrs, false)?;
 
+        if overrides.flatten {
+            return Err(Error::new_spanned(
+                raw,
+                "#[postgres(flatten)] may only be applied to struct fields",
+            ));
+        }
+
         // variant level name override takes precendence over container level rename_all override
         let name = overrides.name.unwrap_or_else(|| match rename_all {
             Some(rule) => rule.apply_to_field(&raw.ident.to_string()),
